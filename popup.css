@@ -1,0 +1,76 @@
+:root{
+  --glass: rgba(18,18,24,0.55);
+  --text: #e7e7ef;
+  --muted: #b7b9c6;
+  --primary: #7c5cff;
+  --primaryHover: #6b4bf0;
+  --border: rgba(255,255,255,0.12);
+  --shadow: 0 8px 30px rgba(0,0,0,0.35);
+  --radius: 16px;
+  --pad: 12px;
+}
+html,body{
+  width: 420px;
+  min-height: 280px;
+  margin:0; padding:0;
+  font-family: system-ui, Segoe UI, Roboto, Inter, sans-serif;
+  color: var(--text);
+}
+#wallpaper{
+  position:fixed; inset:0; background: #101018 center/cover no-repeat;
+  filter: saturate(1.05);
+  z-index:0;
+}
+
+#wallpaper {
+  position: fixed;
+  inset: 0;
+  background: #101018 top center / cover no-repeat;
+  /* Always show top of the image */
+  filter: none;
+  z-index: 0;
+}
+
+.glass {
+  position: relative;
+  z-index: 1;
+  margin: 10px;
+  padding: 12px;
+  /* removed blur for sharp wallpaper */
+  background: rgba(18,18,24,0.55);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.row{ display:flex; gap:8px; align-items:center; }
+.space{ justify-content: space-between; }
+.end{ justify-content: flex-end; }
+.gap{ gap:12px; }
+.title{ font-weight:700; letter-spacing:.3px; }
+.btn{
+  background: #202030; color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 12px; border-radius: 12px; cursor: pointer;
+  transition: .15s ease; font-weight:600;
+}
+.btn:hover{ filter: brightness(1.08); }
+.btn.primary{ background: var(--primary); border-color: transparent; }
+.btn.primary:hover{ background: var(--primaryHover); }
+.btn.ghost{ background: transparent; }
+.inp, textarea{
+  width:100%; padding:8px 10px; color:var(--text);
+  background:#1b1b25; border:1px solid var(--border); border-radius:10px;
+}
+textarea{ resize: vertical; }
+.lbl{ display:block; margin:10px 0 6px; color: var(--muted); font-size:12px; }
+.lbl-inline{ color: var(--muted); font-size:13px; }
+.clip{ margin-top:10px; }
+.clip .label{ font-size:12px; color:var(--muted); margin-bottom:4px; }
+#clipText{ background:#161621; }
+.panel{
+  margin-top:14px; padding:12px; border:1px solid var(--border);
+  border-radius:12px; background:#161621bb;
+}
+.panel-title{ font-weight:700; opacity:.9; margin-bottom:8px; }
+.hidden{ display:none; }
+.hint{ margin-top:10px; font-size:12px; color:var(--muted); text-align:center; }

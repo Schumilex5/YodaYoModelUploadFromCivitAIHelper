@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Yodayo New Model Filler Helper",
+  "version": "1.0",
+  "description": "Copy model title from CivitAI, translate & sanitize, then paste into Yodayo.",
+  "action": {
+    "default_title": "Yodayo Helper",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }    
+  },
+  "permissions": ["storage", "scripting", "activeTab"],
+  "host_permissions": [
+    "https://civitai.com/*",
+    "https://www.civitai.com/*",
+    "https://yodayo.com/*",
+    "https://www.yodayo.com/*",
+    "https://translation.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://civitai.com/*", "https://www.civitai.com/*"],
+      "js": ["contentScript_civitai.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://yodayo.com/*", "https://www.yodayo.com/*"],
+      "js": ["contentScript_yodayo.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

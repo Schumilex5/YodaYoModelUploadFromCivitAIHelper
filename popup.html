@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Yodayo Helper</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div id="wallpaper"></div>
+
+  <div class="glass">
+    <header class="row space">
+      <div class="title">Yodayo Model Filler</div>
+      <button id="btnSettings" class="btn ghost" title="Settings">⚙️</button>
+    </header>
+
+    <div class="row">
+      <button id="btnCopy" class="btn primary">Copy from CivitAI</button>
+      <button id="btnPaste" class="btn">Paste to Yodayo</button>
+    </div>
+
+    <div id="clipBox" class="clip">
+      <div class="label">Clipboard</div>
+      <textarea id="clipText" rows="3" readonly></textarea>
+    </div>
+
+    <!-- Settings panel -->
+    <div id="settingsPanel" class="panel hidden">
+      <div class="panel-title">Settings</div>
+
+      <label class="lbl">Ignore words (comma-separated)</label>
+      <textarea id="ignoreWords" rows="2" placeholder="e.g. lora, checkpoint"></textarea>
+
+      <div class="row gap">
+        <label class="lbl-inline"><input id="chkTranslate" type="checkbox" /> Translate to:</label>
+        <input id="targetLang" type="text" class="inp" value="en" maxlength="8" style="width:80px" />
+      </div>
+
+      <div class="lbl" style="color: #aaa; font-size: 12px;">
+        Uses free built-in Google Translate (no API key required)
+      </div>
+
+      <div class="panel-title" style="margin-top:10px;">Wallpaper</div>
+      <input id="wallFile" type="file" accept="image/*" />
+
+      <div class="row gap">
+        <label class="lbl-inline">Opacity</label>
+        <input id="wallOpacity" type="range" min="0.3" max="1" step="0.01" />
+        <button id="btnClearWall" class="btn ghost">Clear</button>
+      </div>
+
+      <div class="row end" style="margin-top: 8px;">
+        <button id="btnSaveSettings" class="btn primary">Save</button>
+        <button id="btnCloseSettings" class="btn">Close</button>
+      </div>
+    </div>
+
+    <footer class="hint">
+      On a CivitAI model page → <b>Copy</b>. Then on Yodayo → <b>Paste</b>.
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
