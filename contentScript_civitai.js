@@ -1,82 +1,99 @@
-// contentScript_civitai.js — v3.4.2 ultra-stable title detection
+// contentScript_civitai.js — v3.4.4 (auto-inject + dynamic detection)
 (() => {
-  console.log("[CivitAI Script] Loaded (idle, waiting for popup)");
+  console.log("[CivitAI Script] Persistent mode loaded");
 
-  chrome.runtime.onMessage.addListener(async (req, sender, sendResponse) => {
-    if (req.type !== "CIVITAI_GET_TITLE") return;
-    console.log("[CivitAI Script] Triggered by popup → extracting…");
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    const getText = (el) => (el ? el.textContent.trim() : "");
+  const looksLikeTags = (text) => {
+    if (!text) return false;
+    const commas = (text.match(/,/g) || []).length;
+    const words = text.split(/\s+/).length;
+    return commas > 5 && words / commas < 3;
+  };
 
-    const looksLikeTags = (text) => {
-      if (!text) return false;
-      const commas = (text.match(/,/g) || []).length;
-      const words = text.split(/\s+/).length;
-      return commas > 5 && words / commas < 3;
-    };
+  const isEnglish = (str) => /^[\x00-\x7F\s.,!?'"()\-:;0-9A-Za-z]*$/.test(str);
 
-    const isEnglish = (str) => /^[\x00-\x7F\s.,!?'"()\-:;0-9A-Za-z]*$/.test(str);
-
-    async function translateToEnglish(text) {
-      try {
-        const url =
-          "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=" +
-          encodeURIComponent(text);
-        const res = await fetch(url);
-        const data = await res.json();
-        return data?.[0]?.map((a) => a[0]).join("") || text;
-      } catch {
-        return text;
-      }
+  async function translateToEnglish(text) {
+    try {
+      const url =
+        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=" +
+        encodeURIComponent(text);
+      const res = await fetch(url);
+      const data = await res.json();
+      return data?.[0]?.map((a) => a[0]).join("") || text;
+    } catch {
+      return text;
     }
+  }
 
-    // --- Title ---
+  // Title selector list
+  const titleSelectors = [
+    'h1[class*="_____slug___title__"]',
+    'div[class*="_____slug___titleWrapper__"] h1[class*="_____slug___title__"]',
+    "h1.mantine-Title-root",
+    "h1.mantine-Text-root",
+    "h1[data-testid='model-title']",
+    "div[data-testid='model-header'] h1",
+    ".mantine-Group-root h1",
+    ".mantine-Stack-root h1",
+    "h1"
+  ];
+
+  async function waitForTitle(timeout = 6000) {
     let title = "";
-    const titleSelectors = [
-      "h1.mantine-Title-root",
-      "h1.mantine-Text-root",
-      "h1[data-testid='model-title']",
-      "div[data-testid='model-header'] h1",
-      'h1[class*="_____slug___title__"]',
-      'div[class*="_____slug___titleWrapper__"] h1[class*="_____slug___title__"]',
-      "h1",
-    ];
-
-    // wait dynamically up to 3s for title to appear
-    for (let i = 0; i < 30 && !title; i++) {
-      for (const s of titleSelectors) {
-        const el = document.querySelector(s);
-        if (el && el.textContent.trim().length > 1) {
-          title = el.textContent.trim();
-          break;
-        }
+    for (const s of titleSelectors) {
+      const el = document.querySelector(s);
+      if (el && el.textContent.trim().length > 1) {
+        return el.textContent.trim();
       }
-      if (title) break;
-      await new Promise((r) => setTimeout(r, 100));
     }
 
-    // fallback: scan for best candidate
-    if (!title) {
-      const candidates = Array.from(document.querySelectorAll("h1, h2, div"))
-        .map((e) => e.textContent.trim())
-        .filter((t) => t.length > 2 && t.length < 200 && /[A-Za-z\u3040-\u30ff\u4e00-\u9faf]/.test(t));
-      if (candidates.length > 0) title = candidates[0];
-    }
+    // Observe dynamically
+    title = await new Promise((resolve) => {
+      let found = "";
+      const obs = new MutationObserver(() => {
+        for (const sel of titleSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.textContent.trim().length > 1) {
+            found = el.textContent.trim();
+            obs.disconnect();
+            resolve(found);
+            return;
+          }
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => {
+        if (!found) {
+          obs.disconnect();
+          resolve("");
+        }
+      }, timeout);
+    });
 
-    // fallback: meta tags or document.title
+    // Fallback
     if (!title) {
-      const meta = document.querySelector('meta[property="og:title"], meta[name="twitter:title"]');
+      const meta =
+        document.querySelector('meta[property="og:title"]') ||
+        document.querySelector('meta[name="twitter:title"]');
       if (meta && meta.content) title = meta.content.trim();
-      else if (document.title) title = document.title.replace(/\s*\|.*$/, "").trim();
-      else title = "CivitAI_Model";
+      else if (document.title)
+        title = document.title.replace(/\s*\|.*$/, "").trim();
     }
 
-    // --- Category ---
+    return title || "";
+  }
+
+  async function extractData() {
+    const title = await waitForTitle();
+    if (!title) console.warn("[CivitAI] Could not find model title.");
+
+    // Category
     let category = "";
     const catEl = document.querySelector('a[href^="/tag/"]');
     if (catEl) category = catEl.textContent.trim();
 
-    // --- Version ---
+    // Version
     let versionName = "";
     const brushIcon = document.querySelector("svg.tabler-icon-brush");
     if (brushIcon) {
@@ -85,7 +102,7 @@
     }
     if (!versionName) versionName = "v1.0";
 
-    // --- Type & Base model ---
+    // Model type & base
     let modelType = "";
     let baseModel = "";
     const rows = Array.from(document.querySelectorAll("table tr"));
@@ -93,39 +110,36 @@
       const labelEl = tr.querySelector("td:first-child p");
       const valueEl = tr.querySelector("td:nth-child(2)");
       if (!labelEl || !valueEl) continue;
+
       const label = labelEl.textContent.trim().toLowerCase();
       const value = valueEl.textContent.trim();
+
       if (label === "type" && value) modelType = value;
       if (label === "base model" && value) baseModel = value;
     }
     if (!modelType) modelType = "?";
     if (!baseModel) baseModel = "Unknown";
 
-    // --- Trigger Words ---
+    // Trigger groups
     const triggerGroups = [];
     try {
-      const triggerRow = Array.from(document.querySelectorAll("tr"))
-        .find(tr => /trigger\s*words/i.test(tr.textContent));
+      const triggerRow = Array.from(document.querySelectorAll("tr")).find((tr) =>
+        /trigger\s*words/i.test(tr.textContent)
+      );
       if (triggerRow) {
-        console.log("[CivitAI] Found Trigger Words row:", triggerRow);
         const wordDivs = triggerRow.querySelectorAll(
           "div.whitespace-normal.m_4081bf90.mantine-Group-root"
         );
-        console.log("[CivitAI] Found", wordDivs.length, "potential word divs.");
-        wordDivs.forEach(div => {
+        wordDivs.forEach((div) => {
           const raw = div.childNodes[0]?.textContent?.trim() || "";
           if (raw) triggerGroups.push([raw]);
         });
-      } else {
-        console.warn("[CivitAI] No Trigger Words row found!");
       }
     } catch (err) {
       console.error("[CivitAI] Trigger group parse failed:", err);
     }
 
-    console.log("[CivitAI] Final triggerGroups:", triggerGroups);
-
-    // --- Description ---
+    // Description
     let description = "";
     const descBlocks = document.querySelectorAll(
       ".RenderHtml_htmlRenderer__z8vxT pre, .RenderHtml_htmlRenderer__z8vxT code, .RenderHtml_htmlRenderer__z8vxT p"
@@ -142,21 +156,36 @@
       if (fallback) description = fallback.textContent.trim();
     }
 
-    const blacklist = /(sponsor|commission|support|ko-?fi|patreon)/i;
+    // --- Description filtering ---
+    const blacklist = /(sponsor|commission|support|ko-?fi|patreon|credit)/i;
+    const ignorePixai = /for\s+pixai\s+users?/i;
+    const linkPattern = /(https?:\/\/|www\.|pixai\.art|civitai\.com)/i;
+    const keepWeight = /^weight\s*:/i;
+
     description = description
       .split(/\n+/)
-      .filter((line) => !blacklist.test(line))
+      .map((line) => line.trim())
+      .filter((line) => {
+        if (!line) return false;
+        // Always keep "Weight:" lines
+        if (keepWeight.test(line)) return true;
+        // Otherwise filter unwanted lines
+        if (blacklist.test(line)) return false;
+        if (ignorePixai.test(line)) return false;
+        if (linkPattern.test(line)) return false;
+        return true;
+      })
       .join("\n\n")
+      .replace(/\n{3,}/g, "\n\n")
       .trim();
 
-    if (looksLikeTags(description)) {
-      description = title || "";
-    } else if (description && !isEnglish(description)) {
-      description = await translateToEnglish(description);
-    }
 
-    // finalize & send
-    const data = {
+
+    if (looksLikeTags(description)) description = title || "";
+    else if (description && !isEnglish(description))
+      description = await translateToEnglish(description);
+
+    return {
       title,
       modelType,
       category,
@@ -165,26 +194,46 @@
       description,
       triggerGroups,
     };
+  }
 
-    console.log("[CivitAI Script] Extracted data:", data);
+  // Respond to popup
+  chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+    if (req.type !== "CIVITAI_GET_TITLE") return;
+    (async () => {
+      const data = await extractData();
+      console.log("[CivitAI Script] Extracted data:", data);
 
-    // Toast
-    const div = document.createElement("div");
-    div.textContent = `✅ Copied ${triggerGroups.length} trigger group${triggerGroups.length !== 1 ? "s" : ""}`;
-    div.style.cssText = `
-      position: fixed; right: 14px; bottom: 14px; z-index: 999999;
-      background: rgba(0,0,0,.85); color: #fff; font: 12px system-ui;
-      padding: 6px 10px; border-radius: 6px; opacity: 0;
-      transition: opacity .25s ease;
-    `;
-    document.body.appendChild(div);
-    requestAnimationFrame(() => (div.style.opacity = 1));
-    setTimeout(() => {
-      div.style.opacity = 0;
-      setTimeout(() => div.remove(), 400);
-    }, 2000);
+      const div = document.createElement("div");
+      div.textContent = `✅ Copied ${data.triggerGroups.length} trigger group${
+        data.triggerGroups.length !== 1 ? "s" : ""
+      }`;
+      div.style.cssText = `
+        position: fixed; right: 14px; bottom: 14px; z-index: 999999;
+        background: rgba(0,0,0,.85); color: #fff; font: 12px system-ui;
+        padding: 6px 10px; border-radius: 6px; opacity: 0;
+        transition: opacity .25s ease;
+      `;
+      document.body.appendChild(div);
+      requestAnimationFrame(() => (div.style.opacity = 1));
+      setTimeout(() => {
+        div.style.opacity = 0;
+        setTimeout(() => div.remove(), 400);
+      }, 2000);
 
-    sendResponse(data);
+      sendResponse(data);
+    })();
     return true;
   });
+
+  // Automatically re-detect when navigating between models
+  let lastUrl = location.href;
+  const urlObserver = new MutationObserver(() => {
+    if (location.href !== lastUrl) {
+      console.log("[CivitAI] Detected page change → reinitializing");
+      lastUrl = location.href;
+      // trigger early preload for next model
+      waitForTitle(8000);
+    }
+  });
+  urlObserver.observe(document.body, { childList: true, subtree: true });
 })();
