@@ -174,7 +174,7 @@ async function init() {
     await saveSettings();
     els.wall.style.backgroundImage = `url("${dataUrl}")`;
     els.wall.style.opacity = SETTINGS.wallpaperOpacity;
-    await new Promise(r => setTimeout(r, 100)); // wait for layout
+    await new Promise(r => setTimeout(r, 100));
     adjustPopupHeight();
   };
 
@@ -209,12 +209,15 @@ async function init() {
     if (!result?.ok) alert(result?.error || "Paste failed. Open Yodayo's model form first.");
   };
 
-  // Resize popup content area automatically when content changes
   observeLayoutChanges();
   adjustPopupHeight();
+
+  // Start watching wallpaper aspect ratio
+  setTimeout(adjustPopupToWallpaper, 500);
+  watchWallpaperResize();
 }
 
-// Dynamically adjust popup height to fit content
+// === Auto adjust popup height ===
 function adjustPopupHeight() {
   const body = document.body;
   const html = document.documentElement;
@@ -223,10 +226,57 @@ function adjustPopupHeight() {
   body.style.height = newHeight + "px";
 }
 
-// Watch for DOM mutations that change layout (e.g., wallpaper, settings)
+// Watch DOM changes for height updates
 function observeLayoutChanges() {
   const observer = new MutationObserver(() => adjustPopupHeight());
   observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+}
+
+// === AUTO-ADJUST POPUP WIDTH TO FIT WALLPAPER ===
+async function adjustPopupToWallpaper() {
+  const wall = document.querySelector("#wallpaper");
+  if (!wall) return;
+
+  const style = getComputedStyle(wall);
+  const match = style.backgroundImage.match(/url\\(["']?(.*?)["']?\\)/);
+  if (!match) return;
+  const imgUrl = match[1];
+  if (!imgUrl) return;
+
+  const img = new Image();
+  img.src = imgUrl;
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = reject;
+  });
+
+  const popupWidth = window.innerWidth;
+  const popupHeight = window.innerHeight;
+  const popupRatio = popupWidth / popupHeight;
+  const imgRatio = img.width / img.height;
+
+  if (imgRatio > popupRatio + 0.05) {
+    const targetWidth = Math.round(popupHeight * imgRatio);
+    const maxWidth = 900;
+    const newWidth = Math.min(targetWidth, maxWidth);
+
+    try {
+      window.resizeTo(newWidth, popupHeight);
+      console.log(`[Yodayo Helper] Expanded popup width to ${newWidth}px to fit wallpaper.`);
+    } catch (e) {
+      console.warn("Popup resizing blocked by Chrome (normal in default_popup mode).");
+    }
+  }
+}
+
+// Re-run when wallpaper changes
+function watchWallpaperResize() {
+  const wall = document.querySelector("#wallpaper");
+  if (!wall) return;
+  const observer = new MutationObserver(() => {
+    adjustPopupToWallpaper();
+  });
+  observer.observe(wall, { attributes: true, attributeFilter: ["style"] });
 }
 
 init();
