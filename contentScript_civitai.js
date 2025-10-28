@@ -1,4 +1,4 @@
-// contentScript_civitai.js
+// contentScript_civitai.js — v3.4.2 ultra-stable title detection
 (() => {
   console.log("[CivitAI Script] Loaded (idle, waiting for popup)");
 
@@ -37,14 +37,38 @@
       "h1.mantine-Text-root",
       "h1[data-testid='model-title']",
       "div[data-testid='model-header'] h1",
+      'h1[class*="_____slug___title__"]',
+      'div[class*="_____slug___titleWrapper__"] h1[class*="_____slug___title__"]',
       "h1",
     ];
-    for (const s of titleSelectors) {
-      const el = document.querySelector(s);
-      if (el && el.textContent.trim()) {
-        title = el.textContent.trim();
-        break;
+
+    // wait dynamically up to 3s for title to appear
+    for (let i = 0; i < 30 && !title; i++) {
+      for (const s of titleSelectors) {
+        const el = document.querySelector(s);
+        if (el && el.textContent.trim().length > 1) {
+          title = el.textContent.trim();
+          break;
+        }
       }
+      if (title) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // fallback: scan for best candidate
+    if (!title) {
+      const candidates = Array.from(document.querySelectorAll("h1, h2, div"))
+        .map((e) => e.textContent.trim())
+        .filter((t) => t.length > 2 && t.length < 200 && /[A-Za-z\u3040-\u30ff\u4e00-\u9faf]/.test(t));
+      if (candidates.length > 0) title = candidates[0];
+    }
+
+    // fallback: meta tags or document.title
+    if (!title) {
+      const meta = document.querySelector('meta[property="og:title"], meta[name="twitter:title"]');
+      if (meta && meta.content) title = meta.content.trim();
+      else if (document.title) title = document.title.replace(/\s*\|.*$/, "").trim();
+      else title = "CivitAI_Model";
     }
 
     // --- Category ---
@@ -64,20 +88,16 @@
     // --- Type & Base model ---
     let modelType = "";
     let baseModel = "";
-
     const rows = Array.from(document.querySelectorAll("table tr"));
     for (const tr of rows) {
       const labelEl = tr.querySelector("td:first-child p");
       const valueEl = tr.querySelector("td:nth-child(2)");
       if (!labelEl || !valueEl) continue;
-
       const label = labelEl.textContent.trim().toLowerCase();
       const value = valueEl.textContent.trim();
-
       if (label === "type" && value) modelType = value;
       if (label === "base model" && value) baseModel = value;
     }
-
     if (!modelType) modelType = "?";
     if (!baseModel) baseModel = "Unknown";
 
