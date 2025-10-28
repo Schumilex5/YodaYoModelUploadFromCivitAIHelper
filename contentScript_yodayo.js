@@ -1,4 +1,4 @@
-// contentScript_yodayo.js — v2.7.1 (per-word typing fix)
+// contentScript_yodayo.js — v2.8.0 (per-word typing + reliable base model pick)
 (() => {
   console.log("[Yodayo] content script loaded");
 
@@ -7,6 +7,9 @@
 
   const norm = (s) =>
     (s || "").replace(/\s+/g, " ").replace(/\u00A0/g, " ").trim().toLowerCase();
+
+  const normLoose = (s) =>
+    norm(s).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 
   const looksLikeTags = (txt) => {
     if (!txt) return false;
@@ -107,6 +110,7 @@
         sendResponse({ ok: true });
       } catch (err) {
         console.error("[Yodayo] error:", err);
+        setOverlayStatus(`❌ ${err.message || err}`);
         sendResponse({ ok: false, error: err.message });
       }
     })();
@@ -185,6 +189,141 @@
     });
   }
 
+  // ---------- Robust HeadlessUI listbox selection for Base Model ----------
+  async function selectBaseModel(targetText) {
+    if (!targetText || norm(targetText) === "unknown") return false;
+
+    // Normalize target + tokenization
+    const want = normLoose(targetText);
+    const wantTokens = want.split(" ").filter(Boolean);
+
+    const baseBtn =
+      document.querySelector('button[id^="headlessui-listbox-button"][id*=":rq:"]') ||
+      // fallback: any listbox button near "Base model" label
+      Array.from(document.querySelectorAll('button[id^="headlessui-listbox-button"]'))
+        .find(b => /base\s*model/i.test(b.closest("div")?.textContent || ""));
+
+    if (!baseBtn) throw new Error("Base model dropdown not found");
+
+    // Open (or re-open) dropdown
+    const openMenu = async () => {
+      baseBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      baseBtn.click();
+      await delay(200);
+      // also try keyboard open in case of event swallowing
+      baseBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      baseBtn.dispatchEvent(new KeyboardEvent("keyup",   { key: "ArrowDown", bubbles: true }));
+      await delay(120);
+    };
+
+    // Find currently open listbox menu
+    const queryMenus = () => {
+      const listboxes = [
+        ...document.querySelectorAll('[role="listbox"]'),
+        ...document.querySelectorAll('[id^="headlessui-portal-root"] [role="listbox"]'),
+      ];
+      // Also collect generic popovers that HeadlessUI sometimes uses
+      const popovers = Array.from(document.querySelectorAll('[id^="headlessui-portal-root"] *'))
+        .filter(el => /listbox|menu/i.test(el.getAttribute?.("role") || ""));
+
+      return [...new Set([...listboxes, ...popovers])];
+    };
+
+    const gatherOptions = () => {
+      const menus = queryMenus();
+      const opts = [];
+      menus.forEach(menu => {
+        opts.push(
+          ...menu.querySelectorAll('[role="option"], li, button, div[role="option"]')
+        );
+      });
+      // Final fallback: any menu-ish items under portals
+      if (!opts.length) {
+        opts.push(
+          ...document.querySelectorAll('[id^="headlessui-portal-root"] li, [id^="headlessui-portal-root"] button')
+        );
+      }
+      // dedupe
+      return Array.from(new Set(opts));
+    };
+
+    const scoreOption = (el) => {
+      const text = el.textContent || "";
+      const tNorm = normLoose(text);
+      if (!tNorm) return { score: 0, text };
+
+      // scoring tiers
+      if (tNorm === want) return { score: 100, text };
+      if (tNorm.startsWith(want)) return { score: 90, text };
+
+      // token coverage
+      const hasAllTokens = wantTokens.every(tok => tNorm.includes(tok));
+      if (hasAllTokens) return { score: 80, text };
+
+      // partial (at least half tokens)
+      const hits = wantTokens.filter(tok => tNorm.includes(tok)).length;
+      if (hits >= Math.max(1, Math.ceil(wantTokens.length * 0.5))) {
+        return { score: 60, text };
+      }
+
+      // some common aliases (example: illustrious vs illustrious xl / x l / illu)
+      const aliasHit =
+        (/illustrious/.test(want) && /illustrious|illu/.test(tNorm)) ||
+        (/sdxl/.test(want) && /sdxl|stable diffusion xl/.test(tNorm)) ||
+        (/1\.?5/.test(want) && /(1\.?5|sd\s*1\.?5|stable diffusion 1\.?5)/.test(tNorm)) ||
+        (/flux/.test(want) && /flux/.test(tNorm));
+      if (aliasHit) return { score: 55, text };
+
+      return { score: 0, text };
+    };
+
+    // Try up to N attempts: open → read → pick
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await openMenu();
+
+      // wait menu mount
+      let menuReady = false;
+      for (let i = 0; i < 10; i++) {
+        if (queryMenus().length) { menuReady = true; break; }
+        await delay(80);
+      }
+      if (!menuReady) {
+        await delay(150);
+        continue;
+      }
+
+      // collect and score
+      const options = gatherOptions();
+      if (!options.length) {
+        await delay(150);
+        continue;
+      }
+
+      let best = null;
+      for (const el of options) {
+        const s = scoreOption(el);
+        if (s.score > 0) {
+          if (!best || s.score > best.score) best = { ...s, el };
+        }
+      }
+
+      if (best && best.score >= 60) {
+        best.el.scrollIntoView({ behavior: "smooth", block: "center" });
+        await delay(80);
+        (best.el.closest("button") || best.el).click();
+        console.log("[Yodayo] Base model chosen:", best.text.trim());
+        await delay(200);
+        return true;
+      }
+
+      // if not found, try slight delay and re-open next loop
+      await delay(200);
+    }
+
+    console.warn("[Yodayo] Base model option not matched for:", targetText);
+    return false;
+  }
+
   // --- fixed multi-group creation ---
   async function fillStep2(data) {
     console.log("[Yodayo] Step 2");
@@ -196,16 +335,13 @@
     }
 
     if (data.baseModel) {
-      const baseBtn = document.querySelector(
-        'button[id^="headlessui-listbox-button"][id*=":rq:"]'
-      );
-      if (baseBtn) {
-        baseBtn.click();
-        await delay(300);
-        const opt = Array.from(document.querySelectorAll("li, button")).find((b) =>
-          b.textContent.toLowerCase().includes(data.baseModel.toLowerCase())
-        );
-        if (opt) opt.click();
+      try {
+        const ok = await selectBaseModel(data.baseModel);
+        if (!ok) {
+          console.warn("[Yodayo] Falling back: could not click a base model option – leaving default.");
+        }
+      } catch (e) {
+        console.error("[Yodayo] Base model selection error:", e);
       }
     }
 
