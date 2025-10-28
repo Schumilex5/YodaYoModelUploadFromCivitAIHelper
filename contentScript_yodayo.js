@@ -1,4 +1,4 @@
-// contentScript_yodayo.js — v2.8.0 (per-word typing + reliable base model pick)
+// contentScript_yodayo.js — v2.9.0 (robust type/category + fixed step2 + base model + trigger groups)
 (() => {
   console.log("[Yodayo] content script loaded");
 
@@ -17,13 +17,6 @@
     const words = txt.split(/\s+/).length;
     return commas > 5 && words / commas < 3;
   };
-
-  const findTriggerAddButton = () =>
-    Array.from(document.querySelectorAll("button, a, [role='button']"))
-      .find((el) => norm(el.textContent).includes("trigger group"));
-
-  const countTriggerInputs = () =>
-    document.querySelectorAll('input[name="trigger_word_groups"]').length;
 
   const ensureOverlay = () => {
     let box = document.getElementById("__yodayo_groups_overlay");
@@ -73,14 +66,13 @@
     if (msg) el.title = msg;
   };
 
-  // --- new typing logic ---
+  // per-word typing
   async function typeTriggerWordsIntoYodayoInput(inputEl, words) {
     inputEl.focus();
     for (const word of words) {
       inputEl.value = word;
       inputEl.dispatchEvent(new InputEvent("input", { bubbles: true }));
       await delay(rand(30, 70));
-
       inputEl.value += ",";
       inputEl.dispatchEvent(new InputEvent("input", { bubbles: true }));
       inputEl.dispatchEvent(
@@ -89,15 +81,12 @@
       inputEl.dispatchEvent(
         new KeyboardEvent("keyup", { key: "Comma", code: "Comma", bubbles: true })
       );
-
       await delay(rand(60, 120));
     }
     inputEl.blur();
   }
 
-  // ---------------------
-  // Listen from popup
-  // ---------------------
+  // message from popup
   chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     if (req.type !== "YODAYO_SET_FIELDS") return;
     const data = req.data || {};
@@ -117,43 +106,51 @@
     return true;
   });
 
-  // Step 1
+  // Step 1 — type/category/description
   async function fillStep1(data) {
     console.log("[Yodayo] Step 1");
+
     const name = document.querySelector("#display_name");
     if (name && data.title) {
       name.value = data.title;
       name.dispatchEvent(new Event("input", { bubbles: true }));
     }
 
+    // Type
     if (data.modelType) {
-      const typeBtn = document.querySelector(
-        'button[id^="headlessui-listbox-button"][id*=":r8:"]'
-      );
+      const typeLabel = Array.from(document.querySelectorAll("div, label"))
+        .find(el => norm(el.textContent) === "type");
+      const typeBtn = typeLabel
+        ? typeLabel.parentElement.querySelector("button[id^='headlessui-listbox-button']")
+        : Array.from(document.querySelectorAll("button[id^='headlessui-listbox-button']"))
+            .find(b => /choose type/i.test(b.textContent));
       if (typeBtn) {
         typeBtn.click();
         await delay(300);
-        const opt = Array.from(document.querySelectorAll("li, button")).find(
-          (b) => norm(b.textContent) === norm(data.modelType)
-        );
+        const opt = Array.from(document.querySelectorAll("li, button"))
+          .find(b => norm(b.textContent) === norm(data.modelType));
         if (opt) opt.click();
       }
     }
 
+    // Category
     if (data.category) {
-      const catBtn = document.querySelector(
-        'button[id^="headlessui-listbox-button"][id*=":ra:"]'
-      );
+      const catLabel = Array.from(document.querySelectorAll("div, label"))
+        .find(el => norm(el.textContent) === "category");
+      const catBtn = catLabel
+        ? catLabel.parentElement.querySelector("button[id^='headlessui-listbox-button']")
+        : Array.from(document.querySelectorAll("button[id^='headlessui-listbox-button']"))
+            .find(b => /choose category/i.test(b.textContent));
       if (catBtn) {
         catBtn.click();
         await delay(300);
-        const opt = Array.from(document.querySelectorAll("li, button")).find(
-          (b) => norm(b.textContent) === norm(data.category)
-        );
+        const opt = Array.from(document.querySelectorAll("li, button"))
+          .find(b => norm(b.textContent) === norm(data.category));
         if (opt) opt.click();
       }
     }
 
+    // Description
     const descBox = document.querySelector("#description");
     if (descBox) {
       let text = data.description || "";
@@ -163,168 +160,83 @@
       descBox.dispatchEvent(new Event("input", { bubbles: true }));
     }
 
-    const nextBtn = Array.from(document.querySelectorAll("button")).find(
-      (b) => norm(b.textContent) === "next"
-    );
+    // Next button
+    const nextBtn = Array.from(document.querySelectorAll("button"))
+      .find(b => norm(b.textContent) === "next");
     if (nextBtn) {
       nextBtn.click();
       console.log("[Yodayo] clicked Next → Step 2");
     }
   }
 
-  // Step 2
-  function waitForStep2() {
-    return new Promise((resolve) => {
+  // Wait for Step 2
+  function waitForStep2(timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
       const iv = setInterval(() => {
         const ver = document.querySelector("#name");
-        const base = document.querySelector(
-          'button[id^="headlessui-listbox-button"][id*=":rq:"]'
-        );
-        const addBtn = findTriggerAddButton();
-        if (ver && base && addBtn) {
+        const baseBtn = document.querySelector('button[id^="headlessui-listbox-button"][id*=":r"]');
+        const addBtn = Array.from(document.querySelectorAll("button"))
+          .find(b => /trigger\s*group/i.test(b.textContent));
+        if (ver && baseBtn && addBtn) {
           clearInterval(iv);
+          console.log("[Yodayo] Step 2 detected");
           resolve();
+        } else if (Date.now() - start > timeoutMs) {
+          clearInterval(iv);
+          reject(new Error("Step 2 not detected"));
         }
       }, 400);
     });
   }
 
-  // ---------- Robust HeadlessUI listbox selection for Base Model ----------
+  // Base model selection (current :rp:)
   async function selectBaseModel(targetText) {
     if (!targetText || norm(targetText) === "unknown") return false;
-
-    // Normalize target + tokenization
     const want = normLoose(targetText);
     const wantTokens = want.split(" ").filter(Boolean);
 
     const baseBtn =
-      document.querySelector('button[id^="headlessui-listbox-button"][id*=":rq:"]') ||
-      // fallback: any listbox button near "Base model" label
+      document.querySelector('button[id^="headlessui-listbox-button"][id*=":rp:"]') ||
       Array.from(document.querySelectorAll('button[id^="headlessui-listbox-button"]'))
         .find(b => /base\s*model/i.test(b.closest("div")?.textContent || ""));
-
     if (!baseBtn) throw new Error("Base model dropdown not found");
 
-    // Open (or re-open) dropdown
     const openMenu = async () => {
       baseBtn.scrollIntoView({ behavior: "smooth", block: "center" });
       baseBtn.click();
-      await delay(200);
-      // also try keyboard open in case of event swallowing
-      baseBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-      baseBtn.dispatchEvent(new KeyboardEvent("keyup",   { key: "ArrowDown", bubbles: true }));
-      await delay(120);
+      await delay(250);
     };
 
-    // Find currently open listbox menu
-    const queryMenus = () => {
-      const listboxes = [
-        ...document.querySelectorAll('[role="listbox"]'),
-        ...document.querySelectorAll('[id^="headlessui-portal-root"] [role="listbox"]'),
-      ];
-      // Also collect generic popovers that HeadlessUI sometimes uses
-      const popovers = Array.from(document.querySelectorAll('[id^="headlessui-portal-root"] *'))
-        .filter(el => /listbox|menu/i.test(el.getAttribute?.("role") || ""));
+    const getOptions = () =>
+      Array.from(document.querySelectorAll('[role="option"], li, button')).filter(
+        el => el.textContent && el.textContent.trim().length > 0
+      );
 
-      return [...new Set([...listboxes, ...popovers])];
-    };
-
-    const gatherOptions = () => {
-      const menus = queryMenus();
-      const opts = [];
-      menus.forEach(menu => {
-        opts.push(
-          ...menu.querySelectorAll('[role="option"], li, button, div[role="option"]')
-        );
-      });
-      // Final fallback: any menu-ish items under portals
-      if (!opts.length) {
-        opts.push(
-          ...document.querySelectorAll('[id^="headlessui-portal-root"] li, [id^="headlessui-portal-root"] button')
-        );
-      }
-      // dedupe
-      return Array.from(new Set(opts));
-    };
-
-    const scoreOption = (el) => {
-      const text = el.textContent || "";
-      const tNorm = normLoose(text);
-      if (!tNorm) return { score: 0, text };
-
-      // scoring tiers
-      if (tNorm === want) return { score: 100, text };
-      if (tNorm.startsWith(want)) return { score: 90, text };
-
-      // token coverage
-      const hasAllTokens = wantTokens.every(tok => tNorm.includes(tok));
-      if (hasAllTokens) return { score: 80, text };
-
-      // partial (at least half tokens)
-      const hits = wantTokens.filter(tok => tNorm.includes(tok)).length;
-      if (hits >= Math.max(1, Math.ceil(wantTokens.length * 0.5))) {
-        return { score: 60, text };
-      }
-
-      // some common aliases (example: illustrious vs illustrious xl / x l / illu)
-      const aliasHit =
-        (/illustrious/.test(want) && /illustrious|illu/.test(tNorm)) ||
-        (/sdxl/.test(want) && /sdxl|stable diffusion xl/.test(tNorm)) ||
-        (/1\.?5/.test(want) && /(1\.?5|sd\s*1\.?5|stable diffusion 1\.?5)/.test(tNorm)) ||
-        (/flux/.test(want) && /flux/.test(tNorm));
-      if (aliasHit) return { score: 55, text };
-
-      return { score: 0, text };
-    };
-
-    // Try up to N attempts: open → read → pick
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       await openMenu();
-
-      // wait menu mount
-      let menuReady = false;
-      for (let i = 0; i < 10; i++) {
-        if (queryMenus().length) { menuReady = true; break; }
-        await delay(80);
-      }
-      if (!menuReady) {
-        await delay(150);
-        continue;
-      }
-
-      // collect and score
-      const options = gatherOptions();
-      if (!options.length) {
-        await delay(150);
-        continue;
-      }
-
+      await delay(200);
+      const options = getOptions();
       let best = null;
       for (const el of options) {
-        const s = scoreOption(el);
-        if (s.score > 0) {
-          if (!best || s.score > best.score) best = { ...s, el };
-        }
+        const txt = normLoose(el.textContent);
+        if (!txt) continue;
+        const hits = wantTokens.filter(tok => txt.includes(tok)).length;
+        const score = hits / wantTokens.length;
+        if (score > 0.5 && (!best || score > best.score)) best = { el, score };
       }
-
-      if (best && best.score >= 60) {
-        best.el.scrollIntoView({ behavior: "smooth", block: "center" });
-        await delay(80);
-        (best.el.closest("button") || best.el).click();
-        console.log("[Yodayo] Base model chosen:", best.text.trim());
-        await delay(200);
+      if (best) {
+        best.el.click();
+        console.log("[Yodayo] Base model selected:", best.el.textContent.trim());
         return true;
       }
-
-      // if not found, try slight delay and re-open next loop
-      await delay(200);
+      await delay(250);
     }
-
-    console.warn("[Yodayo] Base model option not matched for:", targetText);
+    console.warn("[Yodayo] Base model not matched:", targetText);
     return false;
   }
 
-  // --- fixed multi-group creation ---
+  // Step 2: version/base/trigger groups
   async function fillStep2(data) {
     console.log("[Yodayo] Step 2");
 
@@ -337,16 +249,14 @@
     if (data.baseModel) {
       try {
         const ok = await selectBaseModel(data.baseModel);
-        if (!ok) {
-          console.warn("[Yodayo] Falling back: could not click a base model option – leaving default.");
-        }
+        if (!ok) console.warn("[Yodayo] Base model not matched.");
       } catch (e) {
-        console.error("[Yodayo] Base model selection error:", e);
+        console.error("[Yodayo] Base model error:", e);
       }
     }
 
     const groups = Array.isArray(data.triggerGroups)
-      ? data.triggerGroups.filter((g) => Array.isArray(g) && g.length)
+      ? data.triggerGroups.filter(g => Array.isArray(g) && g.length)
       : [];
     if (!groups.length) {
       setOverlayStatus("No trigger groups captured.");
@@ -358,41 +268,46 @@
     setOverlayStatus(`Creating ${groups.length} trigger group(s)…`);
 
     const findAddBtn = () =>
-      Array.from(document.querySelectorAll("button")).find((b) =>
-        b.textContent.trim().toLowerCase().includes("trigger group")
-      );
+      Array.from(document.querySelectorAll("button"))
+        .find(b => /trigger\s*group/i.test(b.textContent));
+
+    const getGroupBlocks = () =>
+      Array.from(document.querySelectorAll("label[for='trigger_word_groups']"))
+        .map(l => l.closest("div.flex.flex-col.gap-3, div.flex.flex-col.gap-4"))
+        .filter(Boolean);
 
     for (let i = 0; i < groups.length; i++) {
       try {
-        const before = countTriggerInputs();
-
-        let addBtn = findAddBtn();
-        if (!addBtn) throw new Error("Add button not found before click");
+        const before = getGroupBlocks().length;
+        const addBtn = findAddBtn();
+        if (!addBtn) throw new Error("Add button not found");
         addBtn.scrollIntoView({ behavior: "smooth", block: "center" });
         addBtn.click();
-        console.log(`[Yodayo] Clicked Add Trigger Group #${i + 1}`);
+        console.log(`[Yodayo] Add Trigger Group #${i + 1}`);
 
-        // Wait for new inputs
-        let tries = 0;
-        while (countTriggerInputs() < before + 2 && tries < 30) {
+        let newBlock = null;
+        for (let t = 0; t < 30; t++) {
+          const now = getGroupBlocks();
+          if (now.length > before) {
+            newBlock = now[now.length - 1];
+            break;
+          }
           await delay(150);
-          tries++;
         }
+        if (!newBlock) throw new Error("New group not detected");
 
-        const inputs = Array.from(
-          document.querySelectorAll('input[name="trigger_word_groups"]')
-        );
-        const wordInput = inputs.slice(-1)[0];
-        if (!wordInput) throw new Error("Word input not found after add");
+        const inputs = newBlock.querySelectorAll('input[name="trigger_word_groups"]');
+        if (inputs.length < 2) throw new Error("Word input missing");
+        const wordInput = inputs[1];
 
         await typeTriggerWordsIntoYodayoInput(wordInput, groups[i]);
         console.log(`[Yodayo] Typed group ${i + 1}: ${groups[i].join(", ")}`);
         setRowStatus(i, true);
-        await delay(700);
+        await delay(600);
       } catch (err) {
-        console.error(`[Yodayo] Failed on group ${i + 1}:`, err);
+        console.error(`[Yodayo] Group ${i + 1} failed:`, err);
         setRowStatus(i, false, err.message);
-        await delay(700);
+        await delay(600);
       }
     }
 
