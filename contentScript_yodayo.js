@@ -236,82 +236,85 @@
     return false;
   }
 
-  // Step 2: version/base/trigger groups
-  async function fillStep2(data) {
-    console.log("[Yodayo] Step 2");
+  // Step 2 — version + base + trigger groups (multi-group compatible)
+async function fillStep2(data) {
+  console.log("[Yodayo] Step 2");
 
-    const verInput = document.querySelector("#name");
-    if (verInput && data.versionName) {
-      verInput.value = data.versionName;
-      verInput.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-
-    if (data.baseModel) {
-      try {
-        const ok = await selectBaseModel(data.baseModel);
-        if (!ok) console.warn("[Yodayo] Base model not matched.");
-      } catch (e) {
-        console.error("[Yodayo] Base model error:", e);
-      }
-    }
-
-    const groups = Array.isArray(data.triggerGroups)
-      ? data.triggerGroups.filter(g => Array.isArray(g) && g.length)
-      : [];
-    if (!groups.length) {
-      setOverlayStatus("No trigger groups captured.");
-      return;
-    }
-
-    ensureOverlay();
-    renderOverlayGroups(groups);
-    setOverlayStatus(`Creating ${groups.length} trigger group(s)…`);
-
-    const findAddBtn = () =>
-      Array.from(document.querySelectorAll("button"))
-        .find(b => /trigger\s*group/i.test(b.textContent));
-
-    const getGroupBlocks = () =>
-      Array.from(document.querySelectorAll("label[for='trigger_word_groups']"))
-        .map(l => l.closest("div.flex.flex-col.gap-3, div.flex.flex-col.gap-4"))
-        .filter(Boolean);
-
-    for (let i = 0; i < groups.length; i++) {
-      try {
-        const before = getGroupBlocks().length;
-        const addBtn = findAddBtn();
-        if (!addBtn) throw new Error("Add button not found");
-        addBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-        addBtn.click();
-        console.log(`[Yodayo] Add Trigger Group #${i + 1}`);
-
-        let newBlock = null;
-        for (let t = 0; t < 30; t++) {
-          const now = getGroupBlocks();
-          if (now.length > before) {
-            newBlock = now[now.length - 1];
-            break;
-          }
-          await delay(150);
-        }
-        if (!newBlock) throw new Error("New group not detected");
-
-        const inputs = newBlock.querySelectorAll('input[name="trigger_word_groups"]');
-        if (inputs.length < 2) throw new Error("Word input missing");
-        const wordInput = inputs[1];
-
-        await typeTriggerWordsIntoYodayoInput(wordInput, groups[i]);
-        console.log(`[Yodayo] Typed group ${i + 1}: ${groups[i].join(", ")}`);
-        setRowStatus(i, true);
-        await delay(600);
-      } catch (err) {
-        console.error(`[Yodayo] Group ${i + 1} failed:`, err);
-        setRowStatus(i, false, err.message);
-        await delay(600);
-      }
-    }
-
-    setOverlayStatus("✅ All trigger groups added successfully.");
-    console.log("[Yodayo] Completed Step 2.");
+  const verInput = document.querySelector("#name");
+  if (verInput && data.versionName) {
+    verInput.value = data.versionName;
+    verInput.dispatchEvent(new Event("input", { bubbles: true }));
   }
+
+  if (data.baseModel) {
+    try {
+      const ok = await selectBaseModel(data.baseModel);
+      if (!ok) console.warn("[Yodayo] Base model not matched.");
+    } catch (e) {
+      console.error("[Yodayo] Base model error:", e);
+    }
+  }
+
+  const groups = Array.isArray(data.triggerGroups)
+    ? data.triggerGroups.filter(g => Array.isArray(g) && g.length)
+    : [];
+  if (!groups.length) {
+    setOverlayStatus("No trigger groups captured.");
+    return;
+  }
+
+  ensureOverlay();
+  renderOverlayGroups(groups);
+  setOverlayStatus(`Creating ${groups.length} trigger group(s)…`);
+
+  const findAddBtn = () =>
+    Array.from(document.querySelectorAll("button"))
+      .find(b => /trigger\s*group/i.test(b.textContent));
+
+  const countInputs = () =>
+    document.querySelectorAll('input[name="trigger_word_groups"]').length;
+
+  for (let i = 0; i < groups.length; i++) {
+    try {
+      const before = countInputs();
+      const addBtn = findAddBtn();
+      if (!addBtn) throw new Error("Add button not found");
+      addBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+      addBtn.click();
+      console.log(`[Yodayo] Add Trigger Group #${i + 1}`);
+
+      // wait until new inputs appear
+      let tries = 0;
+      while (countInputs() <= before && tries < 40) {
+        await delay(150);
+        tries++;
+      }
+      await delay(150); // small extra to let react finish
+
+      const allInputs = Array.from(
+        document.querySelectorAll('input[name="trigger_word_groups"]')
+      );
+      const newInputs = allInputs.slice(before); // everything newly added
+
+      // every group adds two inputs: [name, words]
+      const wordInput =
+        newInputs.length >= 2
+          ? newInputs[newInputs.length - 1]
+          : allInputs[allInputs.length - 1];
+
+      if (!wordInput) throw new Error("Word input not found after add");
+      await typeTriggerWordsIntoYodayoInput(wordInput, groups[i]);
+      console.log(`[Yodayo] Typed group ${i + 1}: ${groups[i].join(", ")}`);
+      setRowStatus(i, true);
+      await delay(700);
+    } catch (err) {
+      console.error(`[Yodayo] Group ${i + 1} failed:`, err);
+      setRowStatus(i, false, err.message);
+      await delay(700);
+    }
+  }
+
+  setOverlayStatus("✅ All trigger groups added successfully.");
+  console.log("[Yodayo] Completed Step 2.");
+}
 })();
