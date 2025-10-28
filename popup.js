@@ -1,5 +1,4 @@
 // Popup logic for Yodayo Helper Extension (free translate, no API key)
-// Also carries versionName & baseModel through to the paste step.
 
 const $ = sel => document.querySelector(sel);
 
@@ -24,7 +23,7 @@ let SETTINGS = null;
 
 async function loadSettings() {
   const res = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
-  SETTINGS = res.settings;
+  SETTINGS = res.settings || {};
 
   els.chkTranslate.checked = !!SETTINGS.translateEnabled;
   els.targetLang.value = SETTINGS.targetLang || "en";
@@ -84,7 +83,6 @@ async function pasteToYodayoInActiveTab(data) {
 
 async function saveClip(clip) {
   await chrome.runtime.sendMessage({ type: "SAVE_CLIP", clip });
-  // Show brief summary
   const type = clip.modelType || "?";
   const cat = clip.category || "?";
   els.clipText.value = `${clip.title}\n[${type}] ${cat}\nver: ${clip.versionName || ""} | base: ${clip.baseModel || ""}`;
@@ -125,8 +123,7 @@ async function fileToDataUrlCompressed(file, maxW = 1920, maxH = 1080, quality =
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0, width, height);
 
-  const out = canvas.toDataURL("image/webp", quality);
-  return out;
+  return canvas.toDataURL("image/webp", quality);
 }
 
 async function saveSettings() {
@@ -151,35 +148,34 @@ async function init() {
   await loadSettings();
   await loadClip();
 
-  els.btnSettings.onclick = () => els.settingsPanel.classList.toggle("hidden");
-  els.btnCloseSettings.onclick = () => els.settingsPanel.classList.add("hidden");
+  els.btnSettings.onclick = () => {
+    els.settingsPanel.classList.toggle("hidden");
+    adjustPopupHeight();
+  };
+  els.btnCloseSettings.onclick = () => {
+    els.settingsPanel.classList.add("hidden");
+    adjustPopupHeight();
+  };
 
   els.btnSaveSettings.onclick = async () => {
-    try {
-      await saveSettings();
-      if (SETTINGS.wallpaperDataUrl) {
-        els.wall.style.opacity = SETTINGS.wallpaperOpacity;
-      }
-      els.settingsPanel.classList.add("hidden");
-    } catch (err) {
-      console.error("Settings save failed:", err);
-      alert("Failed to save settings: " + (err.message || err));
+    await saveSettings();
+    if (SETTINGS.wallpaperDataUrl) {
+      els.wall.style.opacity = SETTINGS.wallpaperOpacity;
     }
+    els.settingsPanel.classList.add("hidden");
+    adjustPopupHeight();
   };
 
   els.wallFile.onchange = async e => {
     const file = e.target.files?.[0];
     if (!file) return;
-    try {
-      const dataUrl = await fileToDataUrlCompressed(file);
-      SETTINGS.wallpaperDataUrl = dataUrl;
-      await saveSettings();
-      els.wall.style.backgroundImage = `url("${dataUrl}")`;
-      els.wall.style.opacity = SETTINGS.wallpaperOpacity;
-    } catch (err) {
-      console.error(err);
-      alert("Failed to process wallpaper image.");
-    }
+    const dataUrl = await fileToDataUrlCompressed(file);
+    SETTINGS.wallpaperDataUrl = dataUrl;
+    await saveSettings();
+    els.wall.style.backgroundImage = `url("${dataUrl}")`;
+    els.wall.style.opacity = SETTINGS.wallpaperOpacity;
+    await new Promise(r => setTimeout(r, 100)); // wait for layout
+    adjustPopupHeight();
   };
 
   els.btnClearWall.onclick = async () => {
@@ -187,6 +183,7 @@ async function init() {
     await saveSettings();
     els.wall.style.backgroundImage = "";
     els.wall.style.opacity = 1;
+    adjustPopupHeight();
   };
 
   els.wallOpacity.oninput = () => {
@@ -194,92 +191,42 @@ async function init() {
   };
 
   els.btnCopy.onclick = async () => {
-    try {
-      const res = await getCivitaiDataInActiveTab();
-      const { title, modelType, description, category, versionName, baseModel } = res;
+    const res = await getCivitaiDataInActiveTab();
+    const { title, modelType, description, category, versionName, baseModel } = res;
+    if (!title) return alert("Could not find model title on this page.");
 
-      if (!title) {
-        alert("Could not find model title on this page.");
-        return;
-      }
+    const ignored = sanitizeWithIgnoreList(title, SETTINGS.ignoreWords);
+    const finalTitle = await translateIfNeeded(ignored);
 
-      const ignored = sanitizeWithIgnoreList(title, SETTINGS.ignoreWords);
-      const finalTitle = await translateIfNeeded(ignored);
-
-      const clip = { title: finalTitle, modelType, description, category, versionName, baseModel };
-      await saveClip(clip);
-    } catch (e) {
-      console.error(e);
-      alert("Copy failed. Make sure you're on a CivitAI model page.");
-    }
+    const clip = { title: finalTitle, modelType, description, category, versionName, baseModel };
+    await saveClip(clip);
   };
 
   els.btnPaste.onclick = async () => {
-    try {
-      const { clip } = await chrome.runtime.sendMessage({ type: "GET_CLIP" });
-      if (!clip || !clip.title) {
-        alert("Clipboard is empty. Copy first.");
-        return;
-      }
-      const result = await pasteToYodayoInActiveTab(clip);
-      if (!result?.ok) {
-        alert(result?.error || "Paste failed. Open Yodayo's model form first.");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Paste failed. Are you on the Yodayo model page?");
-    }
+    const { clip } = await chrome.runtime.sendMessage({ type: "GET_CLIP" });
+    if (!clip || !clip.title) return alert("Clipboard is empty. Copy first.");
+    const result = await pasteToYodayoInActiveTab(clip);
+    if (!result?.ok) alert(result?.error || "Paste failed. Open Yodayo's model form first.");
   };
 
-  // === Popup auto-resize + remember size ===
-  applySavedPopupSize();
-  observePanelSize();
+  // Resize popup content area automatically when content changes
+  observeLayoutChanges();
+  adjustPopupHeight();
 }
 
-async function applySavedPopupSize() {
-  try {
-    const { popupSize } = await chrome.storage.local.get("popupSize");
-    if (popupSize?.width && popupSize?.height) {
-      window.resizeTo(popupSize.width, popupSize.height);
-    } else {
-      autoAdjustHeight();
-    }
-  } catch (err) {
-    console.warn("Could not apply saved popup size:", err);
-  }
-}
-
-function autoAdjustHeight() {
-  const root = document.documentElement;
+// Dynamically adjust popup height to fit content
+function adjustPopupHeight() {
   const body = document.body;
-  const desiredHeight = Math.max(
-    root.scrollHeight,
-    body.scrollHeight,
-    root.offsetHeight,
-    body.offsetHeight
-  );
-  const desiredWidth = Math.max(root.scrollWidth, body.scrollWidth, 400);
-  window.resizeTo(desiredWidth, desiredHeight);
+  const html = document.documentElement;
+  const newHeight = Math.max(body.scrollHeight, html.scrollHeight);
+  html.style.height = newHeight + "px";
+  body.style.height = newHeight + "px";
 }
 
-// Save size when user resizes popup manually
-let resizeTimeout;
-window.addEventListener("resize", () => {
-  clearTimeout(resizeTimeout);
-  resizeTimeout = setTimeout(() => {
-    const popupSize = { width: window.outerWidth, height: window.outerHeight };
-    chrome.storage.local.set({ popupSize });
-  }, 500);
-});
-
-// Auto adjust when settings panel is opened
-function observePanelSize() {
-  const observer = new MutationObserver(() => {
-    if (!els.settingsPanel.classList.contains("hidden")) {
-      autoAdjustHeight();
-    }
-  });
-  observer.observe(els.settingsPanel, { attributes: true, attributeFilter: ["class"] });
+// Watch for DOM mutations that change layout (e.g., wallpaper, settings)
+function observeLayoutChanges() {
+  const observer = new MutationObserver(() => adjustPopupHeight());
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true });
 }
 
 init();

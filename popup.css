@@ -9,12 +9,13 @@
   --radius: 16px;
   --pad: 12px;
 }
-html,body{
-  width: 420px;
-  min-height: 280px;
-  margin:0; padding:0;
-  font-family: system-ui, Segoe UI, Roboto, Inter, sans-serif;
-  color: var(--text);
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 400px; /* keep your normal popup width */
+  min-height: 400px;
+  overflow-y: auto;
+  transition: height 0.2s ease;
 }
 #wallpaper{
   position:fixed; inset:0; background: #101018 center/cover no-repeat;
@@ -23,12 +24,13 @@ html,body{
 }
 
 #wallpaper {
-  position: fixed;
-  inset: 0;
-  background: #101018 top center / cover no-repeat;
-  /* Always show top of the image */
-  filter: none;
-  z-index: 0;
+  width: 100%;
+  height: auto;
+  min-height: 80px;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  display: block;
 }
 
 .glass {
