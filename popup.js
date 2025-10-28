@@ -1,6 +1,5 @@
 // Popup logic for Yodayo Helper Extension (free translate, no API key)
-
-const $ = sel => document.querySelector(sel);
+const $ = (s) => document.querySelector(s);
 
 const els = {
   btnCopy: $("#btnCopy"),
@@ -21,6 +20,9 @@ const els = {
 
 let SETTINGS = null;
 
+// ============================
+// Load / Save Settings
+// ============================
 async function loadSettings() {
   const res = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
   SETTINGS = res.settings || {};
@@ -60,6 +62,9 @@ async function translateIfNeeded(text) {
   return text;
 }
 
+// ============================
+// Active Tab Helpers
+// ============================
 async function getActiveTabId() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab?.id;
@@ -67,25 +72,39 @@ async function getActiveTabId() {
 
 async function getCivitaiDataInActiveTab() {
   const tabId = await getActiveTabId();
-  return new Promise(resolve => {
-    chrome.tabs.sendMessage(tabId, { type: "CIVITAI_GET_TITLE" }, res => {
-      resolve(res || {});
-    });
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { type: "CIVITAI_GET_TITLE" }, (res) => resolve(res || {}));
   });
 }
 
 async function pasteToYodayoInActiveTab(data) {
   const tabId = await getActiveTabId();
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     chrome.tabs.sendMessage(tabId, { type: "YODAYO_SET_FIELDS", data }, resolve);
   });
 }
 
+// ============================
+// Clipboard / Clip Storage
+// ============================
 async function saveClip(clip) {
   await chrome.runtime.sendMessage({ type: "SAVE_CLIP", clip });
+
   const type = clip.modelType || "?";
   const cat = clip.category || "?";
-  els.clipText.value = `${clip.title}\n[${type}] ${cat}\nver: ${clip.versionName || ""} | base: ${clip.baseModel || ""}`;
+
+  let tgPreview = "";
+  if (Array.isArray(clip.triggerGroups) && clip.triggerGroups.length) {
+    const flat = clip.triggerGroups.map((g) =>
+      Array.isArray(g) ? g.join(", ") : g
+    ).join("\n");
+    tgPreview = `\n\nTrigger Groups:\n${flat}`;
+  } else {
+    tgPreview = "\n\nTrigger Groups: (none)";
+  }
+
+  els.clipText.value =
+    `${clip.title}\n[${type}] ${cat}\nver: ${clip.versionName || ""} | base: ${clip.baseModel || ""}${tgPreview}`;
 }
 
 async function loadClip() {
@@ -93,12 +112,16 @@ async function loadClip() {
   if (clip?.title) {
     const type = clip.modelType || "?";
     const cat = clip.category || "?";
-    els.clipText.value = `${clip.title}\n[${type}] ${cat}\nver: ${clip.versionName || ""} | base: ${clip.baseModel || ""}`;
+    els.clipText.value =
+      `${clip.title}\n[${type}] ${cat}\nver: ${clip.versionName || ""} | base: ${clip.baseModel || ""}`;
   } else {
     els.clipText.value = "";
   }
 }
 
+// ============================
+// Wallpaper Management
+// ============================
 async function fileToDataUrlCompressed(file, maxW = 1920, maxH = 1080, quality = 0.78) {
   const img = document.createElement("img");
   const fr = new FileReader();
@@ -107,7 +130,7 @@ async function fileToDataUrlCompressed(file, maxW = 1920, maxH = 1080, quality =
     fr.onerror = rej;
     fr.readAsDataURL(file);
   });
-  await new Promise(res => {
+  await new Promise((res) => {
     img.onload = res;
     img.src = dataUrl;
   });
@@ -117,19 +140,17 @@ async function fileToDataUrlCompressed(file, maxW = 1920, maxH = 1080, quality =
   const scale = Math.min(maxW / width, maxH / height, 1);
   width = Math.round(width * scale);
   height = Math.round(height * scale);
-
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0, width, height);
-
   return canvas.toDataURL("image/webp", quality);
 }
 
 async function saveSettings() {
   const ignoreList = els.ignoreWords.value
     .split(",")
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean);
 
   const newSettings = {
@@ -144,10 +165,14 @@ async function saveSettings() {
   SETTINGS = newSettings;
 }
 
+// ============================
+// Initialization
+// ============================
 async function init() {
   await loadSettings();
   await loadClip();
 
+  // UI
   els.btnSettings.onclick = () => {
     els.settingsPanel.classList.toggle("hidden");
     adjustPopupHeight();
@@ -166,7 +191,7 @@ async function init() {
     adjustPopupHeight();
   };
 
-  els.wallFile.onchange = async e => {
+  els.wallFile.onchange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const dataUrl = await fileToDataUrlCompressed(file);
@@ -174,7 +199,7 @@ async function init() {
     await saveSettings();
     els.wall.style.backgroundImage = `url("${dataUrl}")`;
     els.wall.style.opacity = SETTINGS.wallpaperOpacity;
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 100));
     adjustPopupHeight();
   };
 
@@ -190,15 +215,15 @@ async function init() {
     els.wall.style.opacity = parseFloat(els.wallOpacity.value || "0.9");
   };
 
+  // Main buttons
   els.btnCopy.onclick = async () => {
     const res = await getCivitaiDataInActiveTab();
-    const { title, modelType, description, category, versionName, baseModel } = res;
+    const { title, modelType, description, category, versionName, baseModel, triggerGroups } = res;
     if (!title) return alert("Could not find model title on this page.");
 
     const ignored = sanitizeWithIgnoreList(title, SETTINGS.ignoreWords);
     const finalTitle = await translateIfNeeded(ignored);
-
-    const clip = { title: finalTitle, modelType, description, category, versionName, baseModel };
+    const clip = { title: finalTitle, modelType, description, category, versionName, baseModel, triggerGroups };
     await saveClip(clip);
   };
 
@@ -211,13 +236,13 @@ async function init() {
 
   observeLayoutChanges();
   adjustPopupHeight();
-
-  // Start watching wallpaper aspect ratio
   setTimeout(adjustPopupToWallpaper, 500);
   watchWallpaperResize();
 }
 
-// === Auto adjust popup height ===
+// ============================
+// Auto Adjust Popup Height
+// ============================
 function adjustPopupHeight() {
   const body = document.body;
   const html = document.documentElement;
@@ -226,29 +251,27 @@ function adjustPopupHeight() {
   body.style.height = newHeight + "px";
 }
 
-// Watch DOM changes for height updates
 function observeLayoutChanges() {
   const observer = new MutationObserver(() => adjustPopupHeight());
   observer.observe(document.body, { childList: true, subtree: true, attributes: true });
 }
 
-// === AUTO-ADJUST POPUP WIDTH TO FIT WALLPAPER ===
+// ============================
+// Wallpaper Aspect Fit
+// ============================
 async function adjustPopupToWallpaper() {
   const wall = document.querySelector("#wallpaper");
   if (!wall) return;
 
   const style = getComputedStyle(wall);
-  const match = style.backgroundImage.match(/url\\(["']?(.*?)["']?\\)/);
+  const match = style.backgroundImage.match(/url\(["']?(.*?)["']?\)/);
   if (!match) return;
   const imgUrl = match[1];
   if (!imgUrl) return;
 
   const img = new Image();
   img.src = imgUrl;
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-  });
+  await new Promise((res) => (img.onload = res));
 
   const popupWidth = window.innerWidth;
   const popupHeight = window.innerHeight;
@@ -259,23 +282,19 @@ async function adjustPopupToWallpaper() {
     const targetWidth = Math.round(popupHeight * imgRatio);
     const maxWidth = 900;
     const newWidth = Math.min(targetWidth, maxWidth);
-
     try {
       window.resizeTo(newWidth, popupHeight);
       console.log(`[Yodayo Helper] Expanded popup width to ${newWidth}px to fit wallpaper.`);
-    } catch (e) {
+    } catch {
       console.warn("Popup resizing blocked by Chrome (normal in default_popup mode).");
     }
   }
 }
 
-// Re-run when wallpaper changes
 function watchWallpaperResize() {
   const wall = document.querySelector("#wallpaper");
   if (!wall) return;
-  const observer = new MutationObserver(() => {
-    adjustPopupToWallpaper();
-  });
+  const observer = new MutationObserver(() => adjustPopupToWallpaper());
   observer.observe(wall, { attributes: true, attributeFilter: ["style"] });
 }
 
