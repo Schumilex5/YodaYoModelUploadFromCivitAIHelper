@@ -4,12 +4,11 @@ Hi. This was made for personal use, it may have bugs I don't know about, but it 
 - Auto translation to english
 - Copy title, category, trigger words, description from CivitAI to YodaYo with 2 clicks
 
-### installation:
+### Installation:
 * Download the extension folder
 * Go to -> chrome://extensions/
 * Click "Load unpacked extension"
 * Navigate inside the extension folder when asked for location
-###### You can pin the extension now and start it by clicking on it.
 
 ### Usage:
 - Click the extension icon when on a civitai model page and "Copy from civitai"
