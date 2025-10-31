@@ -1,4 +1,4 @@
-// contentScript_civitai.js — v3.4.4 (auto-inject + dynamic detection)
+// contentScript_civitai.js — v3.4.5 (pose→concept + underscore fix + fade msg)
 (() => {
   console.log("[CivitAI Script] Persistent mode loaded");
 
@@ -26,7 +26,6 @@
     }
   }
 
-  // Title selector list
   const titleSelectors = [
     'h1[class*="_____slug___title__"]',
     'div[class*="_____slug___titleWrapper__"] h1[class*="_____slug___title__"]',
@@ -43,12 +42,9 @@
     let title = "";
     for (const s of titleSelectors) {
       const el = document.querySelector(s);
-      if (el && el.textContent.trim().length > 1) {
-        return el.textContent.trim();
-      }
+      if (el && el.textContent.trim().length > 1) return el.textContent.trim();
     }
 
-    // Observe dynamically
     title = await new Promise((resolve) => {
       let found = "";
       const obs = new MutationObserver(() => {
@@ -71,7 +67,6 @@
       }, timeout);
     });
 
-    // Fallback
     if (!title) {
       const meta =
         document.querySelector('meta[property="og:title"]') ||
@@ -80,18 +75,18 @@
       else if (document.title)
         title = document.title.replace(/\s*\|.*$/, "").trim();
     }
-
     return title || "";
   }
 
   async function extractData() {
-    const title = await waitForTitle();
+    let title = await waitForTitle();
     if (!title) console.warn("[CivitAI] Could not find model title.");
 
     // Category
     let category = "";
     const catEl = document.querySelector('a[href^="/tag/"]');
     if (catEl) category = catEl.textContent.trim();
+    if (/^poses?$/i.test(category)) category = "concept"; // fix
 
     // Version
     let versionName = "";
@@ -110,10 +105,8 @@
       const labelEl = tr.querySelector("td:first-child p");
       const valueEl = tr.querySelector("td:nth-child(2)");
       if (!labelEl || !valueEl) continue;
-
       const label = labelEl.textContent.trim().toLowerCase();
       const value = valueEl.textContent.trim();
-
       if (label === "type" && value) modelType = value;
       if (label === "base model" && value) baseModel = value;
     }
@@ -156,7 +149,6 @@
       if (fallback) description = fallback.textContent.trim();
     }
 
-    // --- Description filtering ---
     const blacklist = /(sponsor|commission|support|ko-?fi|patreon|credit)/i;
     const ignorePixai = /for\s+pixai\s+users?/i;
     const linkPattern = /(https?:\/\/|www\.|pixai\.art|civitai\.com)/i;
@@ -167,9 +159,7 @@
       .map((line) => line.trim())
       .filter((line) => {
         if (!line) return false;
-        // Always keep "Weight:" lines
         if (keepWeight.test(line)) return true;
-        // Otherwise filter unwanted lines
         if (blacklist.test(line)) return false;
         if (ignorePixai.test(line)) return false;
         if (linkPattern.test(line)) return false;
@@ -179,34 +169,24 @@
       .replace(/\n{3,}/g, "\n\n")
       .trim();
 
-
-
     if (looksLikeTags(description)) description = title || "";
     else if (description && !isEnglish(description))
       description = await translateToEnglish(description);
 
-    return {
-      title,
-      modelType,
-      category,
-      versionName,
-      baseModel,
-      description,
-      triggerGroups,
-    };
+    // underscore normalization
+    title = title.replace(/_/g, " ");
+    description = description.replace(/_/g, " ");
+
+    return { title, modelType, category, versionName, baseModel, description, triggerGroups };
   }
 
-  // Respond to popup
   chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     if (req.type !== "CIVITAI_GET_TITLE") return;
     (async () => {
       const data = await extractData();
       console.log("[CivitAI Script] Extracted data:", data);
-
       const div = document.createElement("div");
-      div.textContent = `✅ Copied ${data.triggerGroups.length} trigger group${
-        data.triggerGroups.length !== 1 ? "s" : ""
-      }`;
+      div.textContent = `✅ Copied ${data.triggerGroups.length} trigger group${data.triggerGroups.length !== 1 ? "s" : ""}`;
       div.style.cssText = `
         position: fixed; right: 14px; bottom: 14px; z-index: 999999;
         background: rgba(0,0,0,.85); color: #fff; font: 12px system-ui;
@@ -219,19 +199,16 @@
         div.style.opacity = 0;
         setTimeout(() => div.remove(), 400);
       }, 2000);
-
       sendResponse(data);
     })();
     return true;
   });
 
-  // Automatically re-detect when navigating between models
   let lastUrl = location.href;
   const urlObserver = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       console.log("[CivitAI] Detected page change → reinitializing");
       lastUrl = location.href;
-      // trigger early preload for next model
       waitForTitle(8000);
     }
   });
