@@ -1,6 +1,6 @@
-// contentScript_yodayo.js — v2.9.2 (restored typing logic, fade overlay, 128-char title, underscores only for title/desc)
+// contentScript_yodayo.js — v2.9.8 (real paste simulation for instant tag bubbles)
 (() => {
-  console.log("[Yodayo] content script loaded");
+  console.log("[Yodayo] content script v2.9.8 loaded");
 
   const delay = (ms) => new Promise((res) => setTimeout(res, ms));
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -66,21 +66,19 @@
     });
   };
 
-  // ✅ Restored typing logic from v2.9.0 (per-word + key events)
+  // ⚡ True paste simulation (forms React bubbles instantly)
   async function typeTriggerWordsIntoYodayoInput(inputEl, words) {
+    if (!inputEl || !words?.length) return;
     inputEl.focus();
-    for (const word of words) {
-      for (const ch of word) {
-        inputEl.value += ch;
-        inputEl.dispatchEvent(new InputEvent("input", { bubbles: true }));
-        await delay(rand(10, 25));
-      }
-      inputEl.value += ",";
-      inputEl.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      inputEl.dispatchEvent(new KeyboardEvent("keydown", { key: "Comma", code: "Comma", bubbles: true }));
-      inputEl.dispatchEvent(new KeyboardEvent("keyup", { key: "Comma", code: "Comma", bubbles: true }));
-      await delay(rand(60, 120));
-    }
+    const pasteText = words.join(", ");
+    const clipboardEvent = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: new DataTransfer(),
+    });
+    clipboardEvent.clipboardData.setData("text/plain", pasteText);
+    inputEl.dispatchEvent(clipboardEvent);
+    await delay(100);
     inputEl.blur();
   }
 
@@ -282,14 +280,14 @@
 
         if (!wordInput) throw new Error("Word input not found after add");
         await typeTriggerWordsIntoYodayoInput(wordInput, groups[i]);
-        await delay(700);
+        await delay(250);
       } catch (err) {
         console.error(`[Yodayo] Group ${i + 1} failed:`, err);
-        await delay(700);
+        await delay(300);
       }
     }
 
-    setOverlayStatus("✅ All trigger groups added successfully.");
+    setOverlayStatus("✅ All trigger groups pasted successfully.");
     fadeOutOverlay();
   }
 })();
