@@ -1,4 +1,4 @@
-// contentScript_civitai.js — v3.4.5 (pose→concept + underscore fix + fade msg)
+// contentScript_civitai.js — v3.4.8 (description fix + clean text + spoiler expansion + pose→concept + underscore fix + fade msg)
 (() => {
   console.log("[CivitAI Script] Persistent mode loaded");
 
@@ -11,7 +11,7 @@
     return commas > 5 && words / commas < 3;
   };
 
-  const isEnglish = (str) => /^[\x00-\x7F\s.,!?'"()\-:;0-9A-Za-z]*$/.test(str);
+  const isEnglish = (str) => /^[\x00-\x7F\s.,!?'"()\-\:;0-9A-Za-z]*$/.test(str);
 
   async function translateToEnglish(text) {
     try {
@@ -25,6 +25,13 @@
       return text;
     }
   }
+
+  const expandSpoilers = () => {
+    document.querySelectorAll(".mantine-Spoiler-content").forEach((el) => {
+      el.style.maxHeight = "none";
+      el.style.overflow = "visible";
+    });
+  };
 
   const titleSelectors = [
     'h1[class*="_____slug___title__"]',
@@ -79,16 +86,15 @@
   }
 
   async function extractData() {
+    expandSpoilers();
     let title = await waitForTitle();
     if (!title) console.warn("[CivitAI] Could not find model title.");
 
-    // Category
     let category = "";
     const catEl = document.querySelector('a[href^="/tag/"]');
     if (catEl) category = catEl.textContent.trim();
-    if (/^poses?$/i.test(category)) category = "concept"; // fix
+    if (/^poses?$/i.test(category)) category = "concept";
 
-    // Version
     let versionName = "";
     const brushIcon = document.querySelector("svg.tabler-icon-brush");
     if (brushIcon) {
@@ -97,7 +103,6 @@
     }
     if (!versionName) versionName = "v1.0";
 
-    // Model type & base
     let modelType = "";
     let baseModel = "";
     const rows = Array.from(document.querySelectorAll("table tr"));
@@ -113,7 +118,6 @@
     if (!modelType) modelType = "?";
     if (!baseModel) baseModel = "Unknown";
 
-    // Trigger groups
     const triggerGroups = [];
     try {
       const triggerRow = Array.from(document.querySelectorAll("tr")).find((tr) =>
@@ -132,23 +136,25 @@
       console.error("[CivitAI] Trigger group parse failed:", err);
     }
 
-    // Description
+    // Description Fix (v3.4.8)
     let description = "";
-    const descBlocks = document.querySelectorAll(
-      ".RenderHtml_htmlRenderer__z8vxT pre, .RenderHtml_htmlRenderer__z8vxT code, .RenderHtml_htmlRenderer__z8vxT p"
-    );
-    if (descBlocks.length > 0) {
-      description = Array.from(descBlocks)
-        .map((el) => el.textContent.trim())
-        .filter(Boolean)
-        .join("\n\n");
-    } else {
+    expandSpoilers();
+
+    // Prefer full text from the rich description container
+    const descContainer = document.querySelector(".RenderHtml_htmlRenderer__z8vxT");
+    if (descContainer) {
+      description = descContainer.innerText.trim();
+    }
+
+    // fallback if no text found
+    if (!description) {
       const fallback = document.querySelector(
         '[data-testid="model-description"], .mantine-TypographyStylesProvider-root'
       );
-      if (fallback) description = fallback.textContent.trim();
+      if (fallback) description = fallback.innerText.trim();
     }
 
+    // Clean and filter
     const blacklist = /(sponsor|commission|support|ko-?fi|patreon|credit)/i;
     const ignorePixai = /for\s+pixai\s+users?/i;
     const linkPattern = /(https?:\/\/|www\.|pixai\.art|civitai\.com)/i;
@@ -173,7 +179,6 @@
     else if (description && !isEnglish(description))
       description = await translateToEnglish(description);
 
-    // underscore normalization
     title = title.replace(/_/g, " ");
     description = description.replace(/_/g, " ");
 
